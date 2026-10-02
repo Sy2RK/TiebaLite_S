@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.zip
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 @Stable
@@ -84,16 +85,14 @@ object AccountUtil {
         return currentAccount?.getter()
     }
 
-    fun newAccount(uid: String, account: Account, callback: (Long) -> Unit) {
-        GlobalScope.launch(Dispatchers.IO) {
-            val newId = DatabaseUtil.upsertAccountByUid(account)
-            mutableAllAccountsState.value = DatabaseUtil.getAllAccounts()
-            callback(newId)
-        }
+    suspend fun saveAccount(account: Account): Long = withContext(Dispatchers.IO) {
+        val newId = DatabaseUtil.upsertAccountByUid(account)
+        mutableAllAccountsState.value = DatabaseUtil.getAllAccounts()
+        newId
     }
 
-    private fun getAccountInfo(accountId: Int): Account {
-        return runBlocking(Dispatchers.IO) { DatabaseUtil.getAccountById(accountId) } ?: Account()
+    private fun getAccountInfo(accountId: Int): Account? {
+        return runBlocking(Dispatchers.IO) { DatabaseUtil.getAccountById(accountId) }
     }
 
     @JvmStatic
@@ -113,9 +112,9 @@ object AccountUtil {
 
     @JvmStatic
     fun switchAccount(context: Context, id: Int): Boolean {
-        context.sendBroadcast(Intent().setAction(ACTION_SWITCH_ACCOUNT))
         val account = runCatching { getAccountInfo(id) }.getOrNull() ?: return false
         mutableCurrentAccountState.value = account
+        context.sendBroadcast(Intent().setAction(ACTION_SWITCH_ACCOUNT))
         GlobalScope.launch {
             emitGlobalEvent(GlobalEvent.AccountSwitched)
         }
@@ -217,19 +216,22 @@ object AccountUtil {
     }
 
     fun exit(context: Context) {
-        var accounts = allAccounts
-        var account = getLoginInfo() ?: return
-        runBlocking(Dispatchers.IO) { DatabaseUtil.deleteAccount(account) }
+        val account = getLoginInfo() ?: return
+        val accounts = runBlocking(Dispatchers.IO) {
+            DatabaseUtil.deleteAccount(account)
+            DatabaseUtil.getAllAccounts()
+        }
+        mutableAllAccountsState.value = accounts
         CookieManager.getInstance().removeAllCookies(null)
-        if (accounts.size > 1) {
-            accounts = allAccounts
-            account = accounts[0]
-            switchAccount(context, account.id)
-            Toast.makeText(context, "退出登录成功，已切换至账号 " + account.nameShow, Toast.LENGTH_SHORT).show()
+        val nextAccount = accounts.firstOrNull()
+        if (nextAccount != null && switchAccount(context, nextAccount.id)) {
+            Toast.makeText(context, "退出登录成功，已切换至账号 " + nextAccount.nameShow, Toast.LENGTH_SHORT).show()
             return
         }
         mutableCurrentAccountState.value = null
         context.getSharedPreferences("accountData", Context.MODE_PRIVATE).edit().clear().commit()
+        context.sendBroadcast(Intent().setAction(ACTION_SWITCH_ACCOUNT))
+        GlobalScope.launch { emitGlobalEvent(GlobalEvent.AccountSwitched) }
         Toast.makeText(context, R.string.toast_exit_account_success, Toast.LENGTH_SHORT).show()
     }
 

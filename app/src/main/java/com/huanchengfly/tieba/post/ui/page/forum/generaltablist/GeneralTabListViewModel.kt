@@ -1,12 +1,12 @@
 package com.huanchengfly.tieba.post.ui.page.forum.generaltablist
 
 import androidx.compose.runtime.Stable
+import com.huanchengfly.tieba.post.App
 import com.huanchengfly.tieba.post.api.TiebaApi
 import com.huanchengfly.tieba.post.api.models.AgreeBean
 import com.huanchengfly.tieba.post.api.models.protos.FrsTabInfo
 import com.huanchengfly.tieba.post.api.models.protos.GeneralTabList.GeneralTabListResponse
 import com.huanchengfly.tieba.post.api.models.protos.updateAgreeStatus
-import com.huanchengfly.tieba.post.api.retrofit.exception.TiebaUnknownException
 import com.huanchengfly.tieba.post.api.retrofit.exception.getErrorCode
 import com.huanchengfly.tieba.post.api.retrofit.exception.getErrorMessage
 import com.huanchengfly.tieba.post.arch.BaseViewModel
@@ -21,6 +21,7 @@ import com.huanchengfly.tieba.post.arch.wrapImmutable
 import com.huanchengfly.tieba.post.repository.GeneralTabListRepository
 import com.huanchengfly.tieba.post.ui.models.ThreadItemData
 import com.huanchengfly.tieba.post.ui.models.distinctById
+import com.huanchengfly.tieba.post.utils.appPreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
@@ -90,12 +91,12 @@ private object GeneralTabListPartialChangeProducer :
             lastThreadId = 0,
             isDefaultNavTab = navTabInfo.isDefault,
         ).map<GeneralTabListResponse, GeneralTabListPartialChange.FirstLoad> { response ->
-            if (response.data_ == null) throw TiebaUnknownException
-            val threadList = response.data_.general_list.map { ThreadItemData(it.wrapImmutable()) }
+            val page = response.toPage(App.INSTANCE.appPreferences.blockVideo)
+            val threadList = page.visibleThreads.map { ThreadItemData(it.wrapImmutable()) }
             GeneralTabListPartialChange.FirstLoad.Success(
                 threadList = threadList,
-                hasMore = response.data_.has_more == 1,
-                lastThreadId = response.data_.general_list.lastOrNull()?.id ?: 0,
+                hasMore = page.hasMore,
+                lastThreadId = page.lastThreadId,
                 sortType = sortType,
             )
         }
@@ -116,12 +117,12 @@ private object GeneralTabListPartialChangeProducer :
             isDefaultNavTab = navTabInfo.isDefault,
             forceNew = true,
         ).map<GeneralTabListResponse, GeneralTabListPartialChange.Refresh> { response ->
-            if (response.data_ == null) throw TiebaUnknownException
-            val threadList = response.data_.general_list.map { ThreadItemData(it.wrapImmutable()) }
+            val page = response.toPage(App.INSTANCE.appPreferences.blockVideo)
+            val threadList = page.visibleThreads.map { ThreadItemData(it.wrapImmutable()) }
             GeneralTabListPartialChange.Refresh.Success(
                 threadList = threadList,
-                hasMore = response.data_.has_more == 1,
-                lastThreadId = response.data_.general_list.lastOrNull()?.id ?: 0,
+                hasMore = page.hasMore,
+                lastThreadId = page.lastThreadId,
                 sortType = sortType,
             )
         }
@@ -141,13 +142,13 @@ private object GeneralTabListPartialChangeProducer :
             lastThreadId = lastThreadId,
             isDefaultNavTab = navTabInfo.isDefault,
         ).map<GeneralTabListResponse, GeneralTabListPartialChange.LoadMore> { response ->
-            if (response.data_ == null) throw TiebaUnknownException
-            val threadList = response.data_.general_list.map { ThreadItemData(it.wrapImmutable()) }
+            val page = response.toPage(App.INSTANCE.appPreferences.blockVideo, lastThreadId)
+            val threadList = page.visibleThreads.map { ThreadItemData(it.wrapImmutable()) }
             GeneralTabListPartialChange.LoadMore.Success(
                 threadList = threadList,
-                hasMore = (response.data_.has_more == 1) && threadList.isNotEmpty(),
+                hasMore = page.hasMore,
                 currentPage = currentPage + 1,
-                lastThreadId = response.data_.general_list.lastOrNull()?.id ?: lastThreadId,
+                lastThreadId = page.lastThreadId,
             )
         }
             .onStart { emit(GeneralTabListPartialChange.LoadMore.Start) }
@@ -347,7 +348,7 @@ data class GeneralTabListUiState(
     val isRefreshing: Boolean = false,
     val isLoadingMore: Boolean = false,
     val threadList: ImmutableList<ThreadItemData> = persistentListOf(),
-    val currentPage: Int = 1,
+    val currentPage: Int = 0,
     val hasMore: Boolean = true,
     val lastThreadId: Long = 0,
     val sortType: Int = -1,

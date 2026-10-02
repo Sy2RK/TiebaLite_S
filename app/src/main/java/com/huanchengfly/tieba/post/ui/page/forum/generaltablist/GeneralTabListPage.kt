@@ -21,6 +21,7 @@ import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.SnackbarResult
 import androidx.compose.material.Text
+import androidx.compose.material.TextButton
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
@@ -105,7 +106,11 @@ fun GeneralTabListPage(
     )
     val currentPage by viewModel.uiState.collectPartialAsState(
         prop1 = GeneralTabListUiState::currentPage,
-        initial = 1
+        initial = 0
+    )
+    val lastThreadId by viewModel.uiState.collectPartialAsState(
+        prop1 = GeneralTabListUiState::lastThreadId,
+        initial = 0L
     )
     val threadList by viewModel.uiState.collectPartialAsState(
         prop1 = GeneralTabListUiState::threadList,
@@ -115,6 +120,19 @@ fun GeneralTabListPage(
         prop1 = GeneralTabListUiState::sortType,
         initial = -1
     )
+
+    fun loadMore() {
+        viewModel.send(
+            GeneralTabListUiIntent.LoadMore(
+                forumId = forumId,
+                forumName = forumName,
+                navTabInfo = navTabInfo,
+                currentPage = currentPage,
+                lastThreadId = lastThreadId,
+                sortType = sortType,
+            )
+        )
+    }
 
     onGlobalEvent<GeneralTabListUiEvent.BackToTop> {
         lazyListState.animateScrollToItem(0)
@@ -192,57 +210,55 @@ fun GeneralTabListPage(
 
             LoadMoreLayout(
                 isLoading = isLoadingMore,
-                onLoadMore = {
-                    viewModel.send(
-                        GeneralTabListUiIntent.LoadMore(
-                            forumId = forumId,
-                            forumName = forumName,
-                            navTabInfo = navTabInfo,
-                            currentPage = currentPage,
-                            lastThreadId = threadList.lastOrNull()?.thread?.get { id } ?: 0,
-                            sortType = sortType,
-                        )
-                    )
-                },
+                onLoadMore = { loadMore() },
+                enableLoadMore = currentPage > 0 && !isRefreshing,
                 loadEnd = !hasMore,
                 lazyListState = lazyListState,
                 isEmpty = threadList.isEmpty(),
                 modifier = Modifier.weight(1f)
             ) {
-                ThreadList(
-                    state = lazyListState,
-                    items = threadList,
-                    onItemClicked = {
-                        navigator.navigate(
-                            ThreadPageDestination(
-                                it.threadId,
-                                forumId = it.forumId,
-                                threadInfo = it
-                            )
-                        )
-                    },
-                    onItemReplyClicked = {
-                        navigator.navigate(
-                            ThreadPageDestination(
-                                it.threadId,
-                                forumId = it.forumId,
-                                scrollToReply = true
-                            )
-                        )
-                    },
-                    onAgree = { threadInfo ->
-                        viewModel.send(
-                            GeneralTabListUiIntent.Agree(
-                                threadId = threadInfo.id,
-                                postId = threadInfo.firstPostId,
-                                hasAgree = threadInfo.agree?.hasAgree ?: 0,
-                            )
-                        )
-                    },
-                    onUserClicked = {
-                        navigator.navigate(UserProfilePageDestination(it.id))
+                if (threadList.isEmpty() && currentPage > 0 && hasMore && !isRefreshing) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        TextButton(onClick = { loadMore() }, enabled = !isLoadingMore) {
+                            Text(text = stringResource(id = R.string.button_load_more))
+                        }
                     }
-                )
+                } else {
+                    ThreadList(
+                        state = lazyListState,
+                        items = threadList,
+                        onItemClicked = {
+                            navigator.navigate(
+                                ThreadPageDestination(
+                                    it.threadId,
+                                    forumId = it.forumId,
+                                    threadInfo = it
+                                )
+                            )
+                        },
+                        onItemReplyClicked = {
+                            navigator.navigate(
+                                ThreadPageDestination(
+                                    it.threadId,
+                                    forumId = it.forumId,
+                                    scrollToReply = true
+                                )
+                            )
+                        },
+                        onAgree = { threadInfo ->
+                            viewModel.send(
+                                GeneralTabListUiIntent.Agree(
+                                    threadId = threadInfo.id,
+                                    postId = threadInfo.firstPostId,
+                                    hasAgree = threadInfo.agree?.hasAgree ?: 0,
+                                )
+                            )
+                        },
+                        onUserClicked = {
+                            navigator.navigate(UserProfilePageDestination(it.id))
+                        }
+                    )
+                }
             }
         }
 

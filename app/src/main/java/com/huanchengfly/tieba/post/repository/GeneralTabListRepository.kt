@@ -1,19 +1,31 @@
 package com.huanchengfly.tieba.post.repository
 
-import com.huanchengfly.tieba.post.App
 import com.huanchengfly.tieba.post.api.TiebaApi
 import com.huanchengfly.tieba.post.api.models.protos.GeneralTabList.GeneralTabListResponse
 import com.huanchengfly.tieba.post.api.retrofit.exception.TiebaUnknownException
-import com.huanchengfly.tieba.post.utils.appPreferences
+import com.huanchengfly.tieba.post.utils.AccountUtil
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 
 object GeneralTabListRepository {
-    var lastHash: String = ""
-    var lastResponse: GeneralTabListResponse? = null
+    private data class CacheKey(
+        val accountId: Int?,
+        val forumId: Long,
+        val forumName: String,
+        val tabId: Int,
+        val tabType: Int,
+        val tabName: String,
+        val isGeneralTab: Int,
+        val pn: Int,
+        val sortType: Int,
+        val lastThreadId: Long,
+        val isDefaultNavTab: Int,
+    )
+
+    private val cache = ResponseCache<CacheKey, GeneralTabListResponse>()
 
     fun generalTabList(
         forumId: Long,
@@ -28,24 +40,29 @@ object GeneralTabListRepository {
         isDefaultNavTab: Int = 0,
         forceNew: Boolean = false,
     ): Flow<GeneralTabListResponse> {
-        val hash = "${forumId}_${tabId}_${pn}_${sortType}_${lastThreadId}_${tabType}"
-        if (!forceNew && lastResponse != null && lastHash == hash) {
-            return flowOf(lastResponse!!)
-        }
-        lastHash = hash
-        return TiebaApi.getInstance().generalTabList(
-            forumId, forumName, tabId, tabType, tabName, isGeneralTab,
-            pn, sortType, lastThreadId, isDefaultNavTab
-        ).map { response ->
+        return flow {
+            val key = CacheKey(AccountUtil.currentAccount?.id, forumId, forumName, tabId, tabType,
+                tabName, isGeneralTab, pn, sortType, lastThreadId, isDefaultNavTab)
+            val cached = if (forceNew) null else cache.get(key)
+            if (cached != null) {
+                emit(cached)
+            } else {
+                emitAll(TiebaApi.getInstance().generalTabList(
+                    forumId, forumName, tabId, tabType, tabName, isGeneralTab,
+                    pn, sortType, lastThreadId, isDefaultNavTab
+                ).onEach { response ->
+                    if (response.data_ == null) throw TiebaUnknownException
+                    cache.put(key, response)
+                })
+            }
+        }.map { response ->
             if (response.data_ == null) throw TiebaUnknownException
             val userList = response.data_.user_list
             val threadList = response.data_.general_list
                 .map { threadInfo ->
                     threadInfo.copy(author = userList.find { it.id == threadInfo.authorId })
                 }
-                .filter { !App.INSTANCE.appPreferences.blockVideo || it.videoInfo == null }
-                .filter { it.ala_info == null }
             response.copy(data_ = response.data_.copy(general_list = threadList))
-        }.onEach { lastResponse = it }
+        }
     }
 }

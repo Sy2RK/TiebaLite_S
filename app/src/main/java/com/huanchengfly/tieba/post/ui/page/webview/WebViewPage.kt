@@ -268,19 +268,6 @@ fun WebViewPage(
     }
 }
 
-fun isTiebaHost(host: String): Boolean {
-    return host == "wapp.baidu.com" ||
-            host.contains("tieba.baidu.com") ||
-            host == "tiebac.baidu.com"
-}
-
-fun isInternalHost(host: String): Boolean {
-    return isTiebaHost(host) ||
-            host.contains("wappass.baidu.com") ||
-            host.contains("ufosdk.baidu.com") ||
-            host.contains("m.help.baidu.com")
-}
-
 open class MyWebViewClient(
     protected val nativeNavigator: DestinationsNavigator? = null,
 ) : AccompanistWebViewClient() {
@@ -295,14 +282,9 @@ open class MyWebViewClient(
         val scheme = newUri.scheme?.lowercase() ?: return false
         val host = newUri.host?.lowercase() ?: return false
         val path = newUri.path?.lowercase() ?: return false
-        val isHttp = scheme.startsWith("http")
-        val isTieba = host == "wapp.baidu.com" ||
-                host.contains("tieba.baidu.com") ||
-                host == "tiebac.baidu.com"
-        val isInternal = isTieba ||
-                host.contains("wappass.baidu.com") ||
-                host.contains("ufosdk.baidu.com") ||
-                host.contains("m.help.baidu.com")
+        val isHttp = scheme == "http" || scheme == "https"
+        val isTieba = isTiebaHost(host)
+        val isInternal = isInternalHost(host)
         return when {
             isHttp && isTieba -> {
                 if (path == "/f" || path == "/mo/q/m") {

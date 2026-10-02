@@ -11,10 +11,16 @@ import com.huanchengfly.tieba.post.models.database.Block.Companion.getKeywords
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.regex.Pattern
 
 object BlockManager {
-    private val blockList: MutableList<Block> = mutableListOf()
+    private val mutationMutex = Mutex()
+
+    @Volatile
+    private var blockList: List<Block> = emptyList()
 
     val blackList: List<Block>
         get() = blockList.filter { it.category == Block.CATEGORY_BLACK_LIST }
@@ -22,11 +28,11 @@ object BlockManager {
     val whiteList: List<Block>
         get() = blockList.filter { it.category == Block.CATEGORY_WHITE_LIST }
 
-    suspend fun addBlock(block: Block): Block {
+    suspend fun addBlock(block: Block): Block = mutationMutex.withLock {
         val id = DatabaseUtil.insertBlock(block)
         val savedBlock = block.copy(id = id)
-        blockList.add(savedBlock)
-        return savedBlock
+        blockList = blockList + savedBlock
+        savedBlock
     }
 
     fun addBlockAsync(
@@ -34,25 +40,27 @@ object BlockManager {
         callback: ((Boolean) -> Unit)? = null,
     ) {
         GlobalScope.launch(Dispatchers.IO) {
-            val id = DatabaseUtil.insertBlock(block)
-            val savedBlock = block.copy(id = id)
-            blockList.add(savedBlock)
-            callback?.invoke(true)
+            val result = runCatching { addBlock(block) }
+            withContext(Dispatchers.Main) {
+                callback?.invoke(result.isSuccess)
+            }
         }
     }
 
-    suspend fun removeBlock(id: Long) {
+    suspend fun removeBlock(id: Long) = mutationMutex.withLock {
         DatabaseUtil.deleteBlockById(id)
-        blockList.removeAll { it.id == id }
+        blockList = blockList.filterNot { it.id == id }
     }
 
-    suspend fun init() {
-        blockList.addAll(DatabaseUtil.getAllBlocks())
+    suspend fun init() = mutationMutex.withLock {
+        blockList = DatabaseUtil.getAllBlocks()
     }
 
     fun shouldBlock(content: String): Boolean {
-        val isWhite = whiteList.any { block ->
-            block.type == Block.TYPE_KEYWORD && block.getKeywords().any { keyword ->
+        val rules = blockList
+        val isWhite = rules.any { block ->
+            block.category == Block.CATEGORY_WHITE_LIST &&
+                block.type == Block.TYPE_KEYWORD && block.getKeywords().any { keyword ->
                 if (block.isRegex) {
                     try {
                         Pattern.compile(keyword).matcher(content).find()
@@ -66,8 +74,9 @@ object BlockManager {
         }
         if (isWhite)
             return false
-        val isBlack = blackList.any { block ->
-            block.type == Block.TYPE_KEYWORD && block.getKeywords().any { keyword ->
+        val isBlack = rules.any { block ->
+            block.category == Block.CATEGORY_BLACK_LIST &&
+                block.type == Block.TYPE_KEYWORD && block.getKeywords().any { keyword ->
                 if (block.isRegex) {
                     try {
                         Pattern.compile(keyword).matcher(content).find()
@@ -83,14 +92,17 @@ object BlockManager {
     }
 
     fun shouldBlock(userId: Long = 0L, userName: String? = null): Boolean {
-        val isWhite = whiteList.any { block ->
+        val rules = blockList
+        val isWhite = rules.any { block ->
+            block.category == Block.CATEGORY_WHITE_LIST &&
             !block.isRegex &&
                     block.type == Block.TYPE_USER &&
                     (block.uid == userId.toString() || block.username == userName)
         }
         if (isWhite) return false
 
-        val isBlack = blackList.any { block ->
+        val isBlack = rules.any { block ->
+            block.category == Block.CATEGORY_BLACK_LIST &&
             !block.isRegex &&
                     block.type == Block.TYPE_USER &&
                     (block.uid == userId.toString() || block.username == userName)
